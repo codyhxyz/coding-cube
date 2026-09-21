@@ -1,6 +1,6 @@
 import os from 'node:os';
 import pty from 'node-pty';
-import { clampFaceCount, DEFAULT_FACE_COUNT, DEFAULT_WORKSPACE, ensureCubeWorkspace, MAX_FACE_COUNT, readHerdrState } from './herdr-state.js';
+import { clampFaceCount, DEFAULT_FACE_COUNT, DEFAULT_WORKSPACE, ensureCubeWorkspace, isMissingCubeWorkspace, MAX_FACE_COUNT, readHerdrState } from './herdr-state.js';
 import { chooseShell, repairDarwinPtyHelper, resolveExecutable } from './shell.js';
 
 const FACE_MIN = 0;
@@ -55,9 +55,21 @@ export class TerminalGrid {
   async #prepareOnce(wanted, grew) {
     // A face with no terminal id yet is the one case the throttle must not swallow.
     if (!grew && Date.now() - this.preparedAt < 1000) return;
-    const state = this.workspaceReady && !grew
-      ? await readHerdrState(this.herdr, this.workspace)
-      : await ensureCubeWorkspace(this.herdr, this.workspace, this.cwd, wanted);
+    let state;
+    try {
+      state = this.workspaceReady && !grew
+        ? await readHerdrState(this.herdr, this.workspace)
+        : await ensureCubeWorkspace(this.herdr, this.workspace, this.cwd, wanted);
+    } catch (error) {
+      // The workspace can vanish after a successful provision — closed by hand in
+      // HerdR, or a herdr restart that dropped its state. The fast read path then
+      // fails closed with "found 0" on every attach, and the Retry the UI offers
+      // can never heal it. Fall back to provisioning, which is idempotent and
+      // only ever creates; anything else still throws.
+      if (!(this.workspaceReady && !grew && isMissingCubeWorkspace(error, this.workspace))) throw error;
+      this.workspaceReady = false;
+      state = await ensureCubeWorkspace(this.herdr, this.workspace, this.cwd, wanted);
+    }
     this.workspaceReady = true;
     this.setTargets(state.map(({ terminalId }) => terminalId));
   }
