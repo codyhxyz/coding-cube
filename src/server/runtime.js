@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { DEFAULT_HOST_ADDRESS, DEFAULT_HOST_PORT } from '../../public/app/connection-config.js';
 import { paths } from './config.js';
-import { readHerdrState, watchHerdrState } from './herdr-state.js';
+import { ensureCubeWorkspace, isMissingCubeWorkspace, readHerdrState, watchHerdrState } from './herdr-state.js';
 import { createStaticResponder } from './static.js';
 import { TerminalGrid } from './terminal-grid.js';
 import { mountTerminalSocket } from './ws-router.js';
@@ -16,7 +16,20 @@ export function createRuntime(options = {}) {
     workspace: options.workspace,
   });
   const readState = options.herdr ? async () => {
-    const state = await readHerdrState(options.herdr, options.workspace);
+    let state;
+    try {
+      state = await readHerdrState(options.herdr, options.workspace);
+    } catch (error) {
+      // Same heal as the terminal grid's fast path: a workspace that vanished
+      // after boot must be recreated, not reported as a 502 forever.
+      if (!isMissingCubeWorkspace(error, options.workspace)) throw error;
+      state = await ensureCubeWorkspace(
+        options.herdr,
+        options.workspace,
+        terminalGrid.cwd,
+        terminalGrid.faceCount,
+      );
+    }
     terminalGrid.setTargets(state.map(({ terminalId }) => terminalId));
     return state;
   } : null;
