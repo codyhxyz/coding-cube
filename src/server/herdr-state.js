@@ -12,6 +12,18 @@ export { clampFaceCount, DEFAULT_FACE_COUNT, MAX_FACE_COUNT, MIN_FACE_COUNT } fr
 
 const execFileAsync = promisify(execFile);
 
+// True when the error is selectCubeFaces() failing closed on a missing cube
+// workspace. Read paths use this to heal by provisioning instead of throwing:
+// the workspace can disappear out from under a running server (closed by hand
+// in HerdR, or a herdr restart that dropped its state), and without the
+// fallback every attach keeps throwing "found 0" forever — the Retry button
+// the UI offers can never repair it. selectCubeFaces() itself stays strict;
+// only the server's read paths heal, via idempotent ensureCubeWorkspace().
+export function isMissingCubeWorkspace(error, workspaceLabel = DEFAULT_WORKSPACE) {
+  return error instanceof Error
+    && error.message === `expected exactly one HerdR workspace named "${workspaceLabel}"; found 0`;
+}
+
 const EVENT_TYPES = [
   'workspace.renamed',
   'workspace.closed',
@@ -218,11 +230,17 @@ export function selectCubeFaces(envelope, workspaceLabel = DEFAULT_WORKSPACE, fa
 
 // onEvent receives each event unmodified, because /ping needs the agent_status the
 // 250 ms change debounce throws away.
-export async function watchHerdrState(executable, onChange, onDisconnect, workspaceLabel = DEFAULT_WORKSPACE, onEvent = null) {
+export async function watchHerdrState(executable, onChange, onDisconnect, workspaceLabel = DEFAULT_WORKSPACE, onEvent = null, cwd = process.cwd()) {
   // Every face that exists, hidden ones included: `pane.agent_status_changed` cannot be
   // subscribed without a pane_id, so a pane left out here is an agent nothing is
   // watching — which is exactly the blind window that made a healed face sleepable.
-  const state = await readHerdrState(executable, workspaceLabel);
+  let state;
+  try {
+    state = await readHerdrState(executable, workspaceLabel);
+  } catch (error) {
+    if (!isMissingCubeWorkspace(error, workspaceLabel)) throw error;
+    state = await ensureCubeWorkspace(executable, workspaceLabel, cwd);
+  }
   const { stdout } = await execFileAsync(executable, ['--session', 'default', 'status', 'server']);
   const socketPath = stdout.match(/^socket:\s*(.+)$/m)?.[1];
   if (!socketPath) throw new Error('HerdR did not report its default session socket');
