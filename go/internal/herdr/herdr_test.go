@@ -181,3 +181,89 @@ func TestPaneIDsCoverEveryExistingFace(t *testing.T) {
 		t.Fatalf("ids = %v", ids)
 	}
 }
+
+// The snapshot herdr 0.8.2 actually returns: the first nine workspaces and the first nine
+// tabs of each carry a "[n] " switch hint in front of the label they were created with.
+// Matching those labels literally is what broke the cube — no face ever resolved, and a
+// workspace numbered 1-9 could not be found at all.
+func TestSelectFacesReadsThroughHerdrsNumberPrefix(t *testing.T) {
+	tabs := []string{}
+	panes := []string{}
+	for face := 1; face <= 6; face++ {
+		tabs = append(tabs, fmt.Sprintf(`{"tab_id":"t%d","workspace_id":"ws1","label":"[%d] Face %d","number":%d}`, face, face, face, face))
+		panes = append(panes, fmt.Sprintf(`{"pane_id":"p%d","tab_id":"t%d","terminal_id":"x%d"}`, face, face, face))
+	}
+	raw := `{"result":{"snapshot":{"workspaces":[{"workspace_id":"ws1","label":"[1] Coding Cube","number":1}],"tabs":[` +
+		strings.Join(tabs, ",") + `],"panes":[` + strings.Join(panes, ",") + `]}}}`
+	var envelope Envelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	faces, err := SelectFaces(&envelope, DefaultWorkspace, 6)
+	if err != nil {
+		t.Fatalf("SelectFaces: %v", err)
+	}
+	if len(faces) != 6 || faces[0].pane.TerminalID != "x1" || faces[5].pane.TerminalID != "x6" {
+		t.Fatalf("faces = %+v, want every terminal resolved", faces)
+	}
+	if got := CountFaces(&envelope, DefaultWorkspace); got != 6 {
+		t.Fatalf("CountFaces = %d, want 6", got)
+	}
+}
+
+// The tenth tab onward carries no prefix, so a cube wider than nine faces mixes both
+// spellings in one workspace and both have to resolve.
+func TestSelectFacesHandlesMixedPrefixedAndPlainLabels(t *testing.T) {
+	tabs := []string{}
+	panes := []string{}
+	for face := 1; face <= 10; face++ {
+		label := fmt.Sprintf("Face %d", face)
+		if face <= 9 {
+			label = fmt.Sprintf("[%d] Face %d", face, face)
+		}
+		tabs = append(tabs, fmt.Sprintf(`{"tab_id":"t%d","workspace_id":"ws1","label":%q,"number":%d}`, face, label, face))
+		panes = append(panes, fmt.Sprintf(`{"pane_id":"p%d","tab_id":"t%d","terminal_id":"x%d"}`, face, face, face))
+	}
+	raw := `{"result":{"snapshot":{"workspaces":[{"workspace_id":"ws1","label":"Coding Cube","number":11}],"tabs":[` +
+		strings.Join(tabs, ",") + `],"panes":[` + strings.Join(panes, ",") + `]}}}`
+	var envelope Envelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if got := CountFaces(&envelope, DefaultWorkspace); got != 10 {
+		t.Fatalf("CountFaces = %d, want 10", got)
+	}
+}
+
+// A name a human really chose keeps its brackets: the prefix is only stripped when it is
+// that item's own number.
+func TestPlainLabelLeavesABracketedNameAlone(t *testing.T) {
+	if got := plainLabel("[3] notes", 1); got != "[3] notes" {
+		t.Fatalf("plainLabel = %q, want the name untouched", got)
+	}
+	if got := plainLabel("[1] Face 1", 1); got != "Face 1" {
+		t.Fatalf("plainLabel = %q, want %q", got, "Face 1")
+	}
+	// An older herdr sends no number at all, and matched exactly before this existed.
+	if got := plainLabel("Face 1", 0); got != "Face 1" {
+		t.Fatalf("plainLabel = %q, want %q", got, "Face 1")
+	}
+}
+
+// The seed tab a fresh `herdr workspace create` leaves behind is numerically labelled, and
+// arrives decorated as "[1] 1".
+func TestSetupPlanRenamesADecoratedSeedTab(t *testing.T) {
+	raw := `{"result":{"snapshot":{"workspaces":[{"workspace_id":"ws1","label":"[1] Coding Cube","number":1}],` +
+		`"tabs":[{"tab_id":"seed","workspace_id":"ws1","label":"[1] 1","number":1}],"panes":[]}}}`
+	var envelope Envelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := SetupPlan(&envelope, DefaultWorkspace, 6)
+	if err != nil {
+		t.Fatalf("SetupPlan: %v", err)
+	}
+	if plan.WorkspaceID != "ws1" || plan.RenameTabID != "seed" || len(plan.CreateFaces) != 6 {
+		t.Fatalf("plan = %+v, want the existing workspace found and its seed renamed", plan)
+	}
+}

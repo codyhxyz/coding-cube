@@ -30,12 +30,14 @@ var eventTypes = []string{
 type Workspace struct {
 	WorkspaceID string `json:"workspace_id"`
 	Label       string `json:"label"`
+	Number      int    `json:"number"`
 }
 
 type Tab struct {
 	TabID       string `json:"tab_id"`
 	WorkspaceID string `json:"workspace_id"`
 	Label       string `json:"label"`
+	Number      int    `json:"number"`
 }
 
 type Pane struct {
@@ -233,7 +235,7 @@ func SetupPlan(envelope *Envelope, workspaceLabel string, faceCount int) (Plan, 
 	}
 
 	plan := Plan{WorkspaceID: workspaceID, CreateFaces: createFaces}
-	if len(createFaces) == count && len(tabs) == 1 && isDigits(tabs[0].Label) {
+	if len(createFaces) == count && len(tabs) == 1 && isDigits(plainLabel(tabs[0].Label, tabs[0].Number)) {
 		plan.RenameTabID = tabs[0].TabID
 	}
 	return plan, nil
@@ -322,7 +324,7 @@ func SelectFaces(envelope *Envelope, workspaceLabel string, faceCount int) ([]se
 		}
 		panes := panesOf(snapshot, tabs[0].TabID)
 		if len(panes) != 1 || panes[0].TerminalID == "" {
-			return nil, fmt.Errorf("tab %q must contain exactly one terminal pane", tabs[0].Label)
+			return nil, fmt.Errorf("tab %q must contain exactly one terminal pane", plainLabel(tabs[0].Label, tabs[0].Number))
 		}
 		faces = append(faces, selected{face: face, workspace: workspace, tab: tabs[0], pane: panes[0]})
 	}
@@ -347,7 +349,7 @@ func cubeState(envelope *Envelope, raw []byte, workspaceLabel string, faceCount 
 		state = append(state, Face{
 			Face:       item.face,
 			Session:    "default",
-			Workspace:  item.workspace.Label,
+			Workspace:  plainLabel(item.workspace.Label, item.workspace.Number),
 			TabID:      item.tab.TabID,
 			PaneID:     item.pane.PaneID,
 			TerminalID: item.pane.TerminalID,
@@ -388,7 +390,7 @@ func (envelope *Envelope) snapshot() *Snapshot {
 func matchWorkspaces(snapshot *Snapshot, label string) []Workspace {
 	var matches []Workspace
 	for _, workspace := range snapshot.Workspaces {
-		if workspace.Label == label {
+		if plainLabel(workspace.Label, workspace.Number) == label {
 			matches = append(matches, workspace)
 		}
 	}
@@ -418,11 +420,30 @@ func panesOf(snapshot *Snapshot, tabID string) []Pane {
 func labelled(tabs []Tab, label string) []Tab {
 	var matches []Tab
 	for _, tab := range tabs {
-		if tab.Label == label {
+		if plainLabel(tab.Label, tab.Number) == label {
 			matches = append(matches, tab)
 		}
 	}
 	return matches
+}
+
+// plainLabel is the Go port of plainLabel() in public/app/herdr.js.
+//
+// herdr decorates the first nine workspaces and the first nine tabs of each with the
+// number that switches to them — a tab created as "Face 1" is reported as "[1] Face 1" —
+// and leaves the tenth onward undecorated. Measured against herdr 0.8.2, which is what
+// broke the cube: every face matched by name, so no face ever resolved, and a workspace
+// that happened to be numbered 1-9 could not even be found ("found 0").
+//
+// The prefix is a keyboard hint, not the name anybody gave the thing. Stripping it only
+// when it is the item's OWN number leaves a tab a human really did call "[3] notes" alone,
+// and leaves an older herdr that sends no number at all matching exactly as it always did.
+func plainLabel(label string, number int) string {
+	prefix := fmt.Sprintf("[%d] ", number)
+	if number > 0 && strings.HasPrefix(label, prefix) {
+		return label[len(prefix):]
+	}
+	return label
 }
 
 func isDigits(value string) bool {

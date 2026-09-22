@@ -1044,6 +1044,70 @@ async function checkFaceCount() {
     { workspaceId: null, renameTabId: null, createFaces: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
     'a ten-face cube provisions ten tabs on a machine that has never had one',
   );
+  // The snapshot herdr 0.8.2 actually returns. The first nine workspaces and the first
+  // nine tabs of each carry a "[n] " switch hint in front of the label they were created
+  // with; the tenth onward is undecorated, so a wide cube mixes both spellings. Matching
+  // those labels literally is what broke the cube: no face resolved, a workspace numbered
+  // 1-9 reported "found 0", and provisioning then built a SECOND "Coding Cube" every boot.
+  const decorated = (faces) => ({
+    result: {
+      snapshot: {
+        workspaces: [{ workspace_id: 'w1', label: '[1] Coding Cube', number: 1 }],
+        tabs: Array.from({ length: faces }, (_, index) => ({
+          tab_id: `w1:t${index + 1}`,
+          workspace_id: 'w1',
+          number: index + 1,
+          label: index < 9 ? `[${index + 1}] Face ${index + 1}` : `Face ${index + 1}`,
+        })),
+        panes: Array.from({ length: faces }, (_, index) => ({
+          pane_id: `w1:p${index + 1}`,
+          tab_id: `w1:t${index + 1}`,
+          terminal_id: `term-${index + 1}`,
+        })),
+      },
+    },
+  });
+  assert.equal(countCubeFaces(decorated(10)), 10, 'herdr\'s "[n] " switch hint is not part of the name a face was given');
+  assert.deepEqual(
+    selectCubeFaces(decorated(6), 'Coding Cube', 6).map(({ pane }) => pane.terminal_id),
+    Array.from({ length: 6 }, (_, index) => `term-${index + 1}`),
+    'every face must resolve through the prefix, whatever number herdr gave it',
+  );
+  assert.deepEqual(
+    cubeSetupPlan(decorated(6), 'Coding Cube', 6),
+    { workspaceId: 'w1', renameTabId: null, createFaces: [] },
+    'a decorated workspace is the cube\'s own workspace, not a reason to build another one',
+  );
+  assert.equal(
+    herdrMetadata({
+      result: {
+        snapshot: {
+          focused_tab_id: 'w1:t1',
+          workspaces: [{ workspace_id: 'w1', label: '[1] Coding Cube', number: 1 }],
+          tabs: [{ tab_id: 'w1:t1', label: '[1] Face 1', number: 1 }],
+          panes: [],
+        },
+      },
+    }).label,
+    'Face 1',
+    'the name under a face is the one it was given, not herdr\'s keyboard hint',
+  );
+  // A name somebody really chose keeps its brackets: the prefix is only ever stripped
+  // when it is that tab's own number.
+  assert.equal(
+    herdrMetadata({
+      result: {
+        snapshot: {
+          focused_tab_id: 'w1:t1',
+          workspaces: [],
+          tabs: [{ tab_id: 'w1:t1', label: '[3] notes', number: 1 }],
+          panes: [],
+        },
+      },
+    }).label,
+    '[3] notes',
+    'a bracketed name a human chose must survive',
+  );
   assert.doesNotMatch(
     await readFile('src/server/herdr-state.js', 'utf8'),
     /'tab',\s*'close'/,
