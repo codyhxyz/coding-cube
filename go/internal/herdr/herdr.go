@@ -291,6 +291,17 @@ func CountFaces(envelope *Envelope, workspaceLabel string) int {
 	return count
 }
 
+// MissingWorkspaceError is SelectFaces failing closed on a cube workspace that is not
+// there. It is the ONE read failure the grid is allowed to heal by provisioning — the Go
+// counterpart of isMissingCubeWorkspace() in src/server/herdr-state.js. A named type
+// rather than a string comparison, so the wire message stays byte-identical to the JS
+// while callers match on the type.
+type MissingWorkspaceError struct{ Label string }
+
+func (err *MissingWorkspaceError) Error() string {
+	return fmt.Sprintf("expected exactly one HerdR workspace named %q; found 0", err.Label)
+}
+
 // SelectFaces resolves the cube's faces. faceCount < 0 means "however many exist".
 func SelectFaces(envelope *Envelope, workspaceLabel string, faceCount int) ([]selected, error) {
 	snapshot := envelope.snapshot()
@@ -299,6 +310,9 @@ func SelectFaces(envelope *Envelope, workspaceLabel string, faceCount int) ([]se
 	}
 
 	workspaces := matchWorkspaces(snapshot, workspaceLabel)
+	if len(workspaces) == 0 {
+		return nil, &MissingWorkspaceError{Label: workspaceLabel}
+	}
 	if len(workspaces) != 1 {
 		return nil, fmt.Errorf("expected exactly one HerdR workspace named %q; found %d", workspaceLabel, len(workspaces))
 	}

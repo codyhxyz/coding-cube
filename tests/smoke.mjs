@@ -1048,7 +1048,8 @@ async function checkFaceCount() {
   // nine tabs of each carry a "[n] " switch hint in front of the label they were created
   // with; the tenth onward is undecorated, so a wide cube mixes both spellings. Matching
   // those labels literally is what broke the cube: no face resolved, a workspace numbered
-  // 1-9 reported "found 0", and provisioning then built a SECOND "Coding Cube" every boot.
+  // 1-9 reported "found 0", and the heal above then provisioned a SECOND "Coding Cube"
+  // on every attach, because the plan could not see the first one either.
   const decorated = (faces) => ({
     result: {
       snapshot: {

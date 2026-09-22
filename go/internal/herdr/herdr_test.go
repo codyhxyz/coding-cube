@@ -2,6 +2,7 @@ package herdr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -265,5 +266,32 @@ func TestSetupPlanRenamesADecoratedSeedTab(t *testing.T) {
 	}
 	if plan.WorkspaceID != "ws1" || plan.RenameTabID != "seed" || len(plan.CreateFaces) != 6 {
 		t.Fatalf("plan = %+v, want the existing workspace found and its seed renamed", plan)
+	}
+}
+
+// The grid heals exactly one read failure by provisioning: the workspace being gone.
+// Anything else has to keep failing, or re-provisioning would paper over a workspace that
+// is present but broken.
+func TestMissingWorkspaceIsItsOwnError(t *testing.T) {
+	raw := `{"result":{"snapshot":{"workspaces":[],"tabs":[],"panes":[]}}}`
+	var envelope Envelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	_, err := SelectFaces(&envelope, DefaultWorkspace, 6)
+	var missing *MissingWorkspaceError
+	if !errors.As(err, &missing) {
+		t.Fatalf("err = %v, want a MissingWorkspaceError", err)
+	}
+	// The wire message is what the Computers panel shows and what the JS produces.
+	if err.Error() != `expected exactly one HerdR workspace named "Coding Cube"; found 0` {
+		t.Fatalf("message = %q", err.Error())
+	}
+
+	// A workspace that exists but has lost a tab is NOT healable.
+	_, whole := snapshotJSON(t, DefaultWorkspace, 3, "")
+	_, err = SelectFaces(whole, DefaultWorkspace, 6)
+	if errors.As(err, &missing) {
+		t.Fatalf("err = %v, want a plain failure rather than a heal signal", err)
 	}
 }

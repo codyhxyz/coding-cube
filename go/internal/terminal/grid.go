@@ -4,6 +4,7 @@ package terminal
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -151,13 +152,14 @@ func (grid *Grid) prepareOnce(ctx context.Context, wanted int, grew bool) error 
 	var state []herdr.Face
 	var err error
 	if ready && !grew {
-		// Reading is the fast path, never the authority. The workspace can go away under a
-		// running gateway — somebody closes it, or herdr restarts without it — and then
-		// every read fails with "expected exactly one HerdR workspace ...; found 0". Left
-		// alone that is permanent: workspaceReady stays true, so the cube never provisions
-		// again and Retry cannot work until the process is restarted. Fall back to
-		// provisioning instead, which is exactly what a first boot does.
-		if state, err = grid.herdr.ReadState(ctx, grid.workspace, -1); err != nil {
+		// The workspace can vanish after a successful provision — closed by hand in HerdR,
+		// or a herdr restart that dropped its state. The fast read path then fails closed
+		// with "found 0" on every attach, and the Retry the UI offers can never heal it.
+		// Fall back to provisioning, which is idempotent and only ever creates; anything
+		// else still fails, because re-provisioning over an unread error would paper over
+		// a workspace that is present but broken.
+		var missing *herdr.MissingWorkspaceError
+		if state, err = grid.herdr.ReadState(ctx, grid.workspace, -1); errors.As(err, &missing) {
 			grid.mu.Lock()
 			grid.workspaceReady = false
 			grid.mu.Unlock()

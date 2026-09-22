@@ -1,6 +1,6 @@
 import os from 'node:os';
 import pty from 'node-pty';
-import { clampFaceCount, DEFAULT_FACE_COUNT, DEFAULT_WORKSPACE, ensureCubeWorkspace, MAX_FACE_COUNT, readHerdrState } from './herdr-state.js';
+import { clampFaceCount, DEFAULT_FACE_COUNT, DEFAULT_WORKSPACE, ensureCubeWorkspace, isMissingCubeWorkspace, MAX_FACE_COUNT, readHerdrState } from './herdr-state.js';
 import { chooseShell, repairDarwinPtyHelper, resolveExecutable } from './shell.js';
 
 const FACE_MIN = 0;
@@ -55,25 +55,23 @@ export class TerminalGrid {
   async #prepareOnce(wanted, grew) {
     // A face with no terminal id yet is the one case the throttle must not swallow.
     if (!grew && Date.now() - this.preparedAt < 1000) return;
-    const state = await this.#readOrProvision(wanted, grew);
+    let state;
+    try {
+      state = this.workspaceReady && !grew
+        ? await readHerdrState(this.herdr, this.workspace)
+        : await ensureCubeWorkspace(this.herdr, this.workspace, this.cwd, wanted);
+    } catch (error) {
+      // The workspace can vanish after a successful provision — closed by hand in
+      // HerdR, or a herdr restart that dropped its state. The fast read path then
+      // fails closed with "found 0" on every attach, and the Retry the UI offers
+      // can never heal it. Fall back to provisioning, which is idempotent and
+      // only ever creates; anything else still throws.
+      if (!(this.workspaceReady && !grew && isMissingCubeWorkspace(error, this.workspace))) throw error;
+      this.workspaceReady = false;
+      state = await ensureCubeWorkspace(this.herdr, this.workspace, this.cwd, wanted);
+    }
     this.workspaceReady = true;
     this.setTargets(state.map(({ terminalId }) => terminalId));
-  }
-
-  // Reading is the fast path, never the authority. The workspace can go away under a
-  // running gateway — somebody closes it, or herdr restarts without it — and then every
-  // read fails with "expected exactly one HerdR workspace ...; found 0". Left alone that
-  // is permanent: workspaceReady stays true, so the cube never provisions again and Retry
-  // cannot work until the process is restarted. Fall back to provisioning instead, which
-  // is exactly what a first boot does.
-  async #readOrProvision(wanted, grew) {
-    if (!this.workspaceReady || grew) return ensureCubeWorkspace(this.herdr, this.workspace, this.cwd, wanted);
-    try {
-      return await readHerdrState(this.herdr, this.workspace);
-    } catch {
-      this.workspaceReady = false;
-      return ensureCubeWorkspace(this.herdr, this.workspace, this.cwd, wanted);
-    }
   }
 
   setTargets(targets) {
