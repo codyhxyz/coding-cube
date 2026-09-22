@@ -7,6 +7,9 @@ import {
   MAX_FACE_COUNT,
   MIN_FACE_COUNT,
 } from '../../public/app/face-count.js';
+// One definition of "what is this thing actually called", shared with the page — see
+// plainLabel() for the "[1] Face 1" herdr reports for a tab created as "Face 1".
+import { plainLabel } from '../../public/app/herdr.js';
 
 export { clampFaceCount, DEFAULT_FACE_COUNT, MAX_FACE_COUNT, MIN_FACE_COUNT } from '../../public/app/face-count.js';
 
@@ -109,7 +112,7 @@ export function cubeSetupPlan(envelope, workspaceLabel = DEFAULT_WORKSPACE, face
   const snapshot = envelope?.result?.snapshot;
   if (!snapshot) throw new Error('HerdR snapshot is missing');
 
-  const workspaces = snapshot.workspaces.filter(({ label }) => label === workspaceLabel);
+  const workspaces = snapshot.workspaces.filter((workspace) => plainLabel(workspace) === workspaceLabel);
   if (workspaces.length > 1) {
     throw new Error(`expected at most one HerdR workspace named "${workspaceLabel}"; found ${workspaces.length}`);
   }
@@ -120,12 +123,12 @@ export function cubeSetupPlan(envelope, workspaceLabel = DEFAULT_WORKSPACE, face
   const tabs = snapshot.tabs.filter(({ workspace_id }) => workspace_id === workspaceId);
   const createFaces = [];
   for (const face of allFaces) {
-    const matches = tabs.filter(({ label }) => label === `Face ${face}`);
+    const matches = tabs.filter((tab) => plainLabel(tab) === `Face ${face}`);
     if (matches.length > 1) throw new Error(`HerdR workspace "${workspaceLabel}" contains duplicate tabs named "Face ${face}"`);
     if (!matches.length) createFaces.push(face);
   }
 
-  const seed = createFaces.length === count && tabs.length === 1 && /^\d+$/.test(tabs[0].label) ? tabs[0].tab_id : null;
+  const seed = createFaces.length === count && tabs.length === 1 && /^\d+$/.test(plainLabel(tabs[0])) ? tabs[0].tab_id : null;
   return { workspaceId, renameTabId: seed, createFaces };
 }
 
@@ -133,7 +136,7 @@ function cubeState(envelope, workspaceLabel, faceCount = null) {
   return selectCubeFaces(envelope, workspaceLabel, faceCount).map(({ face, workspace, tab, pane }) => ({
     face,
     session: 'default',
-    workspace: workspace.label,
+    workspace: plainLabel(workspace),
     tabId: tab.tab_id,
     paneId: pane.pane_id,
     terminalId: pane.terminal_id,
@@ -180,14 +183,14 @@ export function cubePaneScope(state, workspaceLabel = DEFAULT_WORKSPACE) {
 // cannot widen the cube past what AgentCore will serve.
 export function countCubeFaces(envelope, workspaceLabel = DEFAULT_WORKSPACE) {
   const snapshot = envelope?.result?.snapshot;
-  const workspace = snapshot?.workspaces?.find(({ label }) => label === workspaceLabel);
+  const workspace = snapshot?.workspaces?.find((candidate) => plainLabel(candidate) === workspaceLabel);
   if (!workspace) return 0;
   const tabs = snapshot.tabs.filter(({ workspace_id }) => workspace_id === workspace.workspace_id);
   // A face only counts if it is whole. selectCubeFaces() refuses a snapshot over a tab
   // that has lost its pane, and one broken face nobody is even looking at must not take
   // the visible cube down with it — the sweep repairs it on the next pass.
   const usable = (face) => {
-    const matches = tabs.filter(({ label }) => label === `Face ${face}`);
+    const matches = tabs.filter((tab) => plainLabel(tab) === `Face ${face}`);
     if (matches.length !== 1) return false;
     const panes = snapshot.panes.filter(({ tab_id }) => tab_id === matches[0].tab_id);
     return panes.length === 1 && Boolean(panes[0].terminal_id);
@@ -201,7 +204,7 @@ export function selectCubeFaces(envelope, workspaceLabel = DEFAULT_WORKSPACE, fa
   const snapshot = envelope?.result?.snapshot;
   if (!snapshot) throw new Error('HerdR snapshot is missing');
 
-  const workspaces = snapshot.workspaces.filter(({ label }) => label === workspaceLabel);
+  const workspaces = snapshot.workspaces.filter((workspace) => plainLabel(workspace) === workspaceLabel);
   if (workspaces.length !== 1) {
     throw new Error(`expected exactly one HerdR workspace named "${workspaceLabel}"; found ${workspaces.length}`);
   }
@@ -217,12 +220,12 @@ export function selectCubeFaces(envelope, workspaceLabel = DEFAULT_WORKSPACE, fa
 
   return Array.from({ length: count }, (_, face) => {
     const label = `Face ${face + 1}`;
-    const tabs = workspaceTabs.filter((tab) => tab.label === label);
+    const tabs = workspaceTabs.filter((tab) => plainLabel(tab) === label);
     if (tabs.length !== 1) throw new Error(`HerdR workspace "${workspaceLabel}" must contain exactly one tab named "${label}"`);
     const tab = tabs[0];
     const panes = snapshot.panes.filter(({ tab_id }) => tab_id === tab.tab_id);
     if (panes.length !== 1 || !panes[0].terminal_id) {
-      throw new Error(`tab "${tab.label}" must contain exactly one terminal pane`);
+      throw new Error(`tab "${plainLabel(tab)}" must contain exactly one terminal pane`);
     }
     return { face, workspace, tab, pane: panes[0] };
   });
