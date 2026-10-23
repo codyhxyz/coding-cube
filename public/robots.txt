@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /session
+Disallow: /prepare
+Disallow: /mint
+
+Sitemap: https://codingcube.codyh.xyz/sitemap.xml
