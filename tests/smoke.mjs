@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { HandController, handSample } from '../public/app/hand-tracking.js';
+import { SwipeGate } from '../public/app/air-swipe.js';
 import { herdrMetadata } from '../public/app/herdr.js';
 import { accessoryKeyInput, commandKeyInput, commandPromptDirection, ctrlCode, promptLine } from '../public/app/terminal-keys.js';
 import { DEFAULT_AGENTCORE_ORIGIN, DEFAULT_WEB_ORIGIN, mixedContentBlocked, normalizeHostOrigin, pairingUrl, parseFragment } from '../public/app/connection-config.js';
@@ -22,7 +22,7 @@ import {
   MAX_FACE_COUNT as CANONICAL_MAX_FACE_COUNT,
   MIN_FACE_COUNT as CANONICAL_MIN_FACE_COUNT,
 } from '../public/app/face-count.js';
-import { MAX_FACES } from '../public/app/facets.js';
+import { buildFacets, frontFace, MAX_FACES, neighbourFace } from '../public/app/facets.js';
 import {
   createWorkspaceLifecycle,
   deriveWorkspaceState,
@@ -508,54 +508,8 @@ assert.deepEqual(
   'focused HerdR metadata should drive each face',
 );
 
-const handFixtures = JSON.parse(await readFile(new URL('./hand-landmarks.json', import.meta.url), 'utf8'));
-const openHand = trackedHand('open');
-const pinchedHand = trackedHand('pinch');
-const fistHand = trackedHand('fist');
-const openSample = handSample(openHand);
-const pinchSample = handSample(pinchedHand);
-const fistSample = handSample(fistHand);
-assert.ok(openSample.pinch > 1.5 && openSample.eligible, 'a recorded open hand should be a release posture');
-assert.ok(pinchSample.pinch < 0.8 && pinchSample.eligible, 'a recorded thumb-index pinch should be grabbable');
-assert.ok(Math.abs(handSample(trackedHand('pinch', 0.2, 0.1, 0.5)).pinch - pinchSample.pinch) < 1e-6, '3D pinch strength should be independent of camera position and hand size');
-const distortedPinch = trackedHand('pinch');
-distortedPinch.landmarks[8].x += 0.3;
-assert.equal(handSample(distortedPinch).pinch, pinchSample.pinch, 'pinch should prefer MediaPipe world landmarks over the 2D projection');
-assert.equal(fistSample.eligible, false, 'a closed fist should not masquerade as a pinch');
-
-const actions = [];
-const controller = new HandController({ id: 'hand-left', onAction: (action) => actions.push(action) });
-for (const time of [0, 40, 80, 120]) controller.update(openHand, time);
-controller.update(trackedHand('open', 0.001), 140);
-controller.update(fistHand, 180);
-controller.update(fistHand, 280);
-assert.equal(actions.length, 0, 'open-hand jitter and a fist should never start a drag');
-controller.update(pinchedHand, 320);
-controller.update(pinchedHand, 400);
-controller.update(trackedHand('pinch', 0.02), 440);
-controller.update(null, 470);
-controller.update(null, 650);
-const actionsBeforeReacquire = actions.length;
-controller.update(trackedHand('pinch', 0.1), 655);
-assert.equal(actions.length, actionsBeforeReacquire, 'short-dropout reacquisition should rebase without jumping');
-controller.update(trackedHand('pinch', 0.12), 690);
-controller.update(trackedHand('open', 0.12), 720);
-controller.update(trackedHand('open', 0.12), 780);
-assert.equal(actions[0].type, 'start', 'a held pinch should start a drag');
-assert.ok(actions.every(({ id }) => id === 'hand-left'), 'each controller should preserve its hand identity');
-assert.ok(actions.some(({ type }) => type === 'move'), 'filtered palm movement should move the drag');
-assert.equal(actions.at(-1).type, 'end', 'a sustained release should end the drag');
-
-const lostActions = [];
-const lostController = new HandController({ onAction: (action) => lostActions.push(action) });
-for (const time of [0, 40, 80, 120]) lostController.update(openHand, time);
-lostController.update(pinchedHand, 160);
-lostController.update(pinchedHand, 240);
-lostController.update(null, 260);
-lostController.update(null, 461);
-lostController.update(pinchedHand, 500);
-lostController.update(pinchedHand, 700);
-assert.deepEqual(lostActions.map(({ type }) => type), ['start', 'cancel'], 'a long dropout should cancel and require an open hand before rearming');
+checkSwipeGate();
+checkSwipeNeighbours();
 
 const settled = integrateDamped(0, MAX_ANGULAR_SPEED, SETTLE_SECONDS);
 assert.equal(SETTLE_SECONDS, 10, 'momentum should damp for ten seconds by default');
@@ -649,7 +603,7 @@ try {
   assert.match(homeSource, /Coding Cube/, 'index should contain the app shell');
   assert.match(homeSource, /momentum-duration/, 'settings should expose the momentum slider');
   assert.match(homeSource, /zero-gravity/, 'settings should expose the zero-gravity toggle');
-  assert.match(homeSource, /hand-control/, 'settings should expose the opt-in hand control');
+  assert.match(homeSource, /id="air-swipe" type="checkbox"/, 'settings should expose the opt-in air swipe');
   assert.match(homeSource, /No computer attached/, "an unattached cube should say so plainly");
   assert.match(homeSource, /install\.sh \| sh/, "onboarding should be one pasteable line, not a build procedure");
   assert.doesNotMatch(homeSource, /npm install|npm start/, "a visitor has not cloned a repo, so do not tell them to build one");
@@ -671,7 +625,9 @@ try {
   assert.match(homeSource, /id="host-policy"/, 'when a workspace sleeps should be stated, not discovered');
   assert.doesNotMatch(homeSource, /HerdR, Pi, terminals/, 'the connection UI should not explain internal architecture');
   assert.doesNotMatch(homeSource, /companion|Interactive preview/i, 'the product should speak of a computer you own, not a companion');
-  assert.equal(homeSource.match(/class="hand-cursor"/g)?.length, 2, 'the UI should expose one marker per tracked hand');
+  assert.match(homeSource, /id="swipe-ready"[^>]*aria-hidden="true"/, 'air swipe should show it sees a hand before it acts');
+  assert.match(homeSource, /id="air-swipe-settings"[^>]*hidden/, 'air swipe stays out of sight until the browser is known to support it');
+  assert.doesNotMatch(homeSource, /hand-cursor|hand-sensitivity|Pinch/, 'the pointer-style hand control is gone');
 
   const manifest = await fetch(`${httpBase}/manifest.webmanifest`);
   assert.equal(manifest.status, 200, 'the manifest should be served');
@@ -682,7 +638,8 @@ try {
 
   const styles = await (await fetch(`${httpBase}/styles.css`)).text();
   assert.match(styles, /\(max-height: 520px\) and \(pointer: coarse\)/, 'short landscape phones should use the mobile controls');
-  assert.match(styles, /\.hand-cursor\[data-state="ineligible"\]::after[^}]*content:\s*"Open fingers"/s, 'a rejected pinch should explain how to become eligible');
+  assert.match(styles, /\.swipe-ready \{[^}]*pointer-events: none/s, 'the ready glow must never take a click meant for the cube');
+  assert.match(styles, /\.air-swipe-settings\[hidden\] \{ display: none; \}/, 'an unsupported browser must not see the air swipe setting');
   assert.match(styles, /@media \(hover: hover\)/, 'hover states must not stick after a tap');
   assert.match(styles, /\.wake \{[^}]*pointer-events: none/s, 'the progress surface must not swallow taps meant for the cube behind it');
   assert.match(styles, /\.wake \{[^}]*width: min\(280px, calc\(100% - 32px\)\)/s, 'wake progress has to stay usable at 320px');
@@ -761,29 +718,22 @@ try {
     const response = await fetch(`${httpBase}/vendor/${asset}`);
     assert.equal(response.status, 200, `${asset} should be served locally`);
   }
-  const handWorker = await fetch(`${httpBase}/app/hand-worker.js`);
-  assert.equal(handWorker.status, 200, 'hand inference worker should be served');
-  const handWorkerSource = await handWorker.text();
-  assert.match(handWorkerSource, /HandLandmarker/, 'the worker should use landmark-only hand inference');
-  assert.match(handWorkerSource, /detectForVideo/, 'hand inference should process video frames in the worker');
-  assert.match(handWorkerSource, /numHands: 2/, 'the existing model should expose both hands');
-  assert.match(handWorkerSource, /worldLandmarks: result\.worldLandmarks/, 'the worker should preserve MediaPipe 3D landmarks');
-  assert.match(handWorkerSource, /handedness: result\.handedness/, 'hand identity should come from MediaPipe');
-  assert.doesNotMatch(handWorkerSource, /result\.landmarks\[0\]/, 'the worker should not discard the second hand');
-  assert.doesNotMatch(handWorkerSource, /GestureRecognizer/, 'unused canned gesture classification should not run');
-  assert.match(handWorkerSource, /forVisionTasks\('\/vendor\/mediapipe\/wasm', true\)/, 'module workers should load the ES module WASM runtime');
-
-  for (const asset of [
-    '/vendor/mediapipe/vision_bundle.mjs',
-    '/vendor/mediapipe/wasm/vision_wasm_module_internal.js',
-    '/models/hand_landmarker.task',
-  ]) {
-    const response = await fetch(`${httpBase}${asset}`, { method: 'HEAD' });
-    assert.equal(response.status, 200, `${asset} should be served locally`);
+  const swipeWorker = await fetch(`${httpBase}/app/swipe-worker.js`);
+  assert.equal(swipeWorker.status, 200, 'the swipe worker should be served');
+  const swipeWorkerSource = await swipeWorker.text();
+  assert.match(swipeWorkerSource, /from '\/vendor\/hunch\/4d2deca\/live\.js'/, 'the worker should use the vendored hunch build');
+  assert.match(swipeWorkerSource, /https:\/\/models\.codyh\.xyz\/eg2\/[0-9a-f]{12}'/, 'weights should come from a content-addressed URL');
+  assert.match(swipeWorkerSource, /caches\?\.open/, 'weights should be kept in Cache Storage after the first download');
+  const hunch = await fetch(`${httpBase}/vendor/hunch/4d2deca/live.js`);
+  assert.equal(hunch.status, 200, 'hunch should be served locally');
+  assert.match(hunch.headers.get('content-type'), /javascript/, 'hunch must be served as a module script');
+  assert.match(await hunch.text(), /export \{[^}]*Choice[^}]*Eyes/s, 'the vendored build should export what the worker imports');
+  const prompts = await import('../public/app/air-swipe-prompts.js');
+  assert.ok(prompts.default.open_hand?.length === 768, 'the open-hand answer needs its prompt vector');
+  assert.ok(Object.values(prompts.default).every((vector) => vector.length === 768), 'every answer should be one EmbeddingGemma 2 vector');
+  for (const gone of ['/vendor/mediapipe/vision_bundle.mjs', '/models/hand_landmarker.task', '/app/hand-worker.js']) {
+    assert.equal((await fetch(`${httpBase}${gone}`, { method: 'HEAD' })).status, 404, `${gone} should be gone with MediaPipe`);
   }
-  const mediapipeWasm = await fetch(`${httpBase}/vendor/mediapipe/wasm/vision_wasm_module_internal.wasm`, { method: 'HEAD' });
-  assert.equal(mediapipeWasm.status, 200, 'MediaPipe WASM should be served locally');
-  assert.equal(mediapipeWasm.headers.get('content-type'), 'application/wasm', 'MediaPipe WASM should use its native content type');
 
   await rejectsWebSocketOrigin(wsBase);
   const slot0 = await openPty(wsBase, 0, 0);
@@ -1658,6 +1608,13 @@ function checkTwoInputSpace() {
     space.dragInput({ type: 'end', id: 'hand-right', time: 50 });
     assert.equal(space.drag, null);
 
+    space.rotation = { x: -8, y: 700 };
+    space.focus(2);
+    assert.equal(space.rotation.y, 630, 'focusing after free spin should turn the short way, to the nearest equivalent view');
+    space.rotation = { x: -8, y: 0 };
+    space.focus(3);
+    assert.equal(space.rotation.y, 90, 'one swipe should animate one step, not most of a turn');
+
     space.focus(0);
     panelClasses.remove('is-focused');
     const focusedZoom = space.zoom;
@@ -1713,11 +1670,77 @@ function classList() {
   };
 }
 
-function trackedHand(name, dx = 0, dy = 0, scale = 1) {
-  return {
-    landmarks: handFixtures[name].map((point) => ({ ...point, x: point.x * scale + dx, y: point.y * scale + dy, z: point.z * scale })),
-    worldLandmarks: handFixtures[name].map(({ x, y, z }) => ({ x: x * scale, y: y * scale, z: z * scale })),
-  };
+// A swipe: an open hand seen, then the motion centroid travelling `travel` of the frame
+// along one axis over `ms`, sampled at the camera's 30 fps.
+function stroke(gate, start, { dx = 0, dy = 0, ms = 300, mass = 0.05, open = true } = {}) {
+  if (open) gate.hand(start, true);
+  const fired = [];
+  for (let t = 0; t <= ms; t += 33) {
+    const f = t / ms;
+    const direction = gate.motion(start + t, { mass, x: 0.5 - dx / 2 + dx * f, y: 0.5 - dy / 2 + dy * f });
+    if (direction) fired.push(direction);
+  }
+  return fired;
+}
+
+function checkSwipeGate() {
+  assert.deepEqual(stroke(new SwipeGate(), 0, { dx: 0.5, open: false }), [], 'motion without a raised open hand must never move the cube');
+  for (const [move, expected] of [[{ dx: 0.5 }, 'right'], [{ dx: -0.5 }, 'left'], [{ dy: 0.5 }, 'down'], [{ dy: -0.5 }, 'up']]) {
+    assert.deepEqual(stroke(new SwipeGate(), 0, move), [expected], `a ${expected} swipe should fire exactly once`);
+  }
+  assert.deepEqual(stroke(new SwipeGate(), 0, { dx: 0.5, dy: 0.4 }), [], 'a diagonal stroke picks no page');
+  assert.deepEqual(stroke(new SwipeGate(), 0, { dx: 0.5, ms: 1200 }), [], 'a slow drift is not a swipe');
+  assert.deepEqual(stroke(new SwipeGate(), 0, { dx: 0.5, mass: 0.6 }), [], 'the whole frame moving is the person or the camera, not a hand');
+  assert.deepEqual(stroke(new SwipeGate(), 0, { dx: 0.15 }), [], 'a short twitch is not a swipe');
+
+  const returning = new SwipeGate();
+  assert.deepEqual(stroke(returning, 0, { dx: 0.5 }), ['right']);
+  assert.deepEqual(stroke(returning, 350, { dx: -0.5 }), [], 'the hand coming back from a swipe is not a swipe back');
+  assert.deepEqual(stroke(returning, 1200, { dx: -0.5 }), ['left'], 'a deliberate swipe back after a beat should fire');
+
+  const repeated = new SwipeGate();
+  assert.deepEqual(stroke(repeated, 0, { dx: 0.5 }), ['right']);
+  assert.deepEqual(stroke(repeated, 300, { dx: 0.5, ms: 150 }), [], 'one stroke must not fire twice');
+  assert.deepEqual(stroke(repeated, 900, { dx: 0.5 }), ['right'], 'swiping on keeps paging');
+
+  const armed = new SwipeGate();
+  armed.hand(0, true);
+  assert.equal(armed.ready(600), true, 'a blurred hand mid-stroke should stay armed briefly');
+  assert.equal(armed.ready(601), false, 'lowering the hand disarms');
+  assert.deepEqual(stroke(armed, 500, { dx: 0.5, ms: 90, open: false }), ['right'], 'a swipe that starts right after the hand was seen should land');
+}
+
+function checkSwipeNeighbours() {
+  for (const count of [6, 7, 10]) {
+    const facets = buildFacets(count);
+    const sides = facets.filter((facet) => !facet.cap).sort((a, b) => a.ring - b.ring);
+    for (const facet of facets) {
+      assert.equal(frontFace(facet.view, facets), facet.face, `looking at ${facet.name} should put it in front at ${count} faces`);
+    }
+    for (const [index, side] of sides.entries()) {
+      const next = sides[(index + 1) % sides.length];
+      const previous = sides[(index - 1 + sides.length) % sides.length];
+      assert.equal(neighbourFace(side.face, 'left', side.face, facets), next.face, 'a left swipe brings in the face on the right');
+      assert.equal(neighbourFace(side.face, 'right', side.face, facets), previous.face, 'a right swipe brings in the face on the left');
+      // The face brought in by a left swipe must sit to the right of the one in front.
+      const rightward = rotatedX(next, side.view);
+      assert.ok(rightward > 0.5, `${next.name} should be on the right while looking at ${side.name}`);
+      assert.equal(neighbourFace(side.face, 'down', side.face, facets), 4, 'a swipe down pulls the Crown in from above');
+      assert.equal(neighbourFace(side.face, 'up', side.face, facets), 5, 'a swipe up brings the Keel in from below');
+    }
+    const port = sides.at(-1).face;
+    assert.equal(neighbourFace(4, 'up', port, facets), port, 'swiping back off the Crown returns to the side it was entered from');
+    assert.equal(neighbourFace(5, 'down', port, facets), port, 'swiping back off the Keel returns to the side it was entered from');
+    assert.equal(neighbourFace(4, 'down', port, facets), null, 'there is nothing above the Crown');
+    assert.equal(neighbourFace(4, 'left', port, facets), sides[0].face, 'a sideways swipe on a cap moves on round the ring');
+  }
+}
+
+// World x of a facet's normal under the rig's rotateX(rx) rotateY(ry): >0 is screen right.
+function rotatedX(facet, rotation) {
+  const a = (facet.angle * Math.PI) / 180;
+  const ry = (rotation.y * Math.PI) / 180;
+  return Math.cos(ry) * Math.sin(a) + Math.sin(ry) * Math.cos(a);
 }
 
 // fetch() will not let us forge a Host header, and forging one is exactly how a

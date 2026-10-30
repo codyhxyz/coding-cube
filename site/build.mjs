@@ -56,7 +56,7 @@ await writeFile(path.join(dist, '_headers'), `/*
 /icons/*
   Cache-Control: public, max-age=86400
 
-/vendor/mediapipe/*
+/vendor/hunch/*
   Cache-Control: public, max-age=604800, immutable
 `);
 

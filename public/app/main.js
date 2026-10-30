@@ -11,9 +11,9 @@ import {
   removeHost,
   setActiveHost,
 } from './connection.js';
-import { capClipPath, capPadding, capSize, clampFaces, DEFAULT_FACES, FACETS, MAX_FACES, MIN_FACES, setFaceCount } from './facets.js';
+import { airSwipeSupported, createAirSwipe } from './air-swipe.js';
+import { capClipPath, capPadding, capSize, clampFaces, DEFAULT_FACES, FACETS, frontFace, MAX_FACES, MIN_FACES, neighbourFace, setFaceCount } from './facets.js';
 import { herdrMetadata } from './herdr.js';
-import { createHandTracking } from './hand-tracking.js';
 import { trackKeyboardInset } from './keyboard-inset.js';
 import { createKeyRow } from './key-row.js';
 import { qrSvg } from './qr.js';
@@ -33,13 +33,12 @@ const opacityValue = document.getElementById('face-opacity-value');
 const momentumInput = document.getElementById('momentum-duration');
 const momentumValue = document.getElementById('momentum-duration-value');
 const gravityInput = document.getElementById('zero-gravity');
-const handInput = document.getElementById('hand-control');
-const handStatus = document.getElementById('hand-control-status');
-const handCamera = document.getElementById('hand-camera');
-const handVideo = document.getElementById('hand-video');
-const handSensitivity = document.getElementById('hand-sensitivity');
-const handSensitivityValue = document.getElementById('hand-sensitivity-value');
-const handCursors = new Map([...document.querySelectorAll('.hand-cursor')].map((cursor) => [cursor.dataset.hand, cursor]));
+const swipeSettings = document.getElementById('air-swipe-settings');
+const swipeInput = document.getElementById('air-swipe');
+const swipeStatus = document.getElementById('air-swipe-status');
+const swipeCamera = document.getElementById('air-swipe-camera');
+const swipeVideo = document.getElementById('air-swipe-video');
+const swipeHint = document.getElementById('swipe-hint');
 const statusBanner = document.getElementById('status-banner');
 const statusBannerText = document.getElementById('status-banner-text');
 const statusBannerAction = document.getElementById('status-banner-action');
@@ -67,6 +66,8 @@ let herdrEvents;
 let herdrRefreshing = false;
 let herdrRefreshQueued = false;
 const HANDOFF_KEY = 'coding-cube.handoff';
+const SWIPE_HINT_KEY = 'coding-cube.swipe-hint';
+const SWIPE_HINT_TIMES = 3;
 // A bounce-back this fast means the host never answered. Declared here because
 // connectHost() runs while this module is still evaluating.
 const HANDOFF_WINDOW_MS = 12_000;
@@ -298,23 +299,25 @@ const keyRow = createKeyRow({
     }
   },
 });
-const hands = createHandTracking({
-  video: handVideo,
-  onInput: (event) => space.dragInput(event),
-  onStatus(status, active) {
-    handStatus.value = status;
-    if (active === undefined) return;
-    handInput.checked = active;
-    document.body.classList.toggle('has-hand-control', active);
+// The side a cap was entered from, so swiping back off the Crown or Keel returns there.
+let swipeSide = 0;
+const swipe = createAirSwipe({
+  video: swipeVideo,
+  onSwipe(direction) {
+    const current = space.focused ?? frontFace(space.rotation);
+    if (!FACETS.find((facet) => facet.face === current)?.cap) swipeSide = current;
+    const next = neighbourFace(current, direction, swipeSide);
+    if (next !== null) space.focus(next);
   },
-  onFeedback({ id, state, visible, x, y }) {
-    const cursor = handCursors.get(id);
-    if (!cursor) return;
-    cursor.hidden = !visible;
-    if (!visible) return;
-    cursor.dataset.state = state;
-    cursor.style.setProperty('--hand-x', `${x * 100}vw`);
-    cursor.style.setProperty('--hand-y', `${y * 100}vh`);
+  onReady(ready) {
+    document.body.classList.toggle('is-swipe-ready', ready);
+    if (ready) showSwipeHint();
+  },
+  onStatus(status, active) {
+    swipeStatus.value = status;
+    if (active === undefined) return;
+    swipeInput.checked = active;
+    document.body.classList.toggle('has-air-swipe', active);
   },
 });
 
@@ -341,24 +344,28 @@ faceCountInput.addEventListener('input', () => updateFaceCountValue(clampFaces(f
 faceCountInput.addEventListener('change', () => applyFaceCount(faceCountInput.value));
 momentumInput.addEventListener('input', updateMomentum);
 gravityInput.addEventListener('change', () => space.setZeroGravity(gravityInput.checked));
-handSensitivity.addEventListener('input', updateHandSensitivity);
-handInput.addEventListener('change', async () => {
-  if (!handInput.checked) {
-    hands.disable();
+// Without WebGPU there is nothing to offer, so the setting is never shown rather than
+// shown as unsupported to somebody who did not ask for it.
+swipeSettings.hidden = !airSwipeSupported();
+swipeInput.addEventListener('change', async () => {
+  if (!swipeInput.checked) {
+    swipe.disable();
     return;
   }
-  handInput.disabled = true;
-  handInput.checked = await hands.enable(handCamera.value);
-  handInput.disabled = false;
+  swipeInput.disabled = true;
+  swipeInput.checked = await swipe.enable(swipeCamera.value);
+  swipeInput.disabled = false;
   await refreshCameras();
 });
-handCamera.addEventListener('change', async () => {
-  handCamera.disabled = true;
-  await hands.selectCamera(handCamera.value);
-  handCamera.disabled = false;
+swipeCamera.addEventListener('change', async () => {
+  swipeCamera.disabled = true;
+  await swipe.selectCamera(swipeCamera.value);
+  swipeCamera.disabled = false;
 });
-navigator.mediaDevices?.addEventListener('devicechange', refreshCameras);
-refreshCameras();
+if (!swipeSettings.hidden) {
+  navigator.mediaDevices?.addEventListener('devicechange', refreshCameras);
+  refreshCameras();
+}
 onPageActivity((active) => {
   fleet.setWindowActive(active);
   // A backgrounded tab is not asking for workspace details, and every refresh is an
@@ -443,7 +450,6 @@ document.getElementById('install-copy').addEventListener('click', async (event) 
 updateOpacity();
 updateFaceCountValue(faceCount);
 updateMomentumValue(space.settleSeconds);
-updateHandSensitivity();
 
 /**
  * @param {{requested?: boolean}} [options] `requested` when a person asked for this
@@ -973,16 +979,16 @@ function updateFaceCountValue(count) {
 }
 
 async function refreshCameras() {
-  const selected = hands.cameraId() || handCamera.value;
+  const selected = swipe.cameraId() || swipeCamera.value;
   try {
-    const devices = await hands.cameras();
-    handCamera.replaceChildren(...devices.map((device, index) => new Option(device.label || `Camera ${index + 1}`, device.deviceId)));
-    if (!devices.length) handCamera.append(new Option('Default camera', ''));
-    handCamera.disabled = !devices.length;
-    if (devices.some((device) => device.deviceId === selected)) handCamera.value = selected;
+    const devices = await swipe.cameras();
+    swipeCamera.replaceChildren(...devices.map((device, index) => new Option(device.label || `Camera ${index + 1}`, device.deviceId)));
+    if (!devices.length) swipeCamera.append(new Option('Default camera', ''));
+    swipeCamera.disabled = !devices.length;
+    if (devices.some((device) => device.deviceId === selected)) swipeCamera.value = selected;
   } catch {
-    handCamera.replaceChildren(new Option('Camera list unavailable', ''));
-    handCamera.disabled = true;
+    swipeCamera.replaceChildren(new Option('Camera list unavailable', ''));
+    swipeCamera.disabled = true;
   }
 }
 
@@ -1050,9 +1056,13 @@ function updateMomentumValue(seconds) {
   momentumInput.setAttribute('aria-valuetext', momentumValue.value);
 }
 
-function updateHandSensitivity() {
-  const value = Number(handSensitivity.value);
-  hands.setSensitivity(value);
-  handSensitivityValue.value = `${value.toFixed(1)}×`;
-  handSensitivity.setAttribute('aria-valuetext', handSensitivityValue.value);
+// The hint names the gesture the first few times a hand is seen, then the glow alone
+// says it. Storage can be missing or refuse; then the hint just keeps showing.
+function showSwipeHint() {
+  let shown = 0;
+  try {
+    shown = Number(localStorage.getItem(SWIPE_HINT_KEY)) || 0;
+    localStorage.setItem(SWIPE_HINT_KEY, String(shown + 1));
+  } catch {}
+  swipeHint.hidden = shown >= SWIPE_HINT_TIMES;
 }

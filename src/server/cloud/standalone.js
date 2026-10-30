@@ -188,7 +188,7 @@ function staticTarget(pathname) {
     const file = path.join(APP_DIR, pathname.slice('/app/'.length));
     if (file.startsWith(`${APP_DIR}${path.sep}`)) return file;
   }
-  // styles.css, icons, manifest, hand-tracking models: the rest of what index.html pulls.
+  // styles.css, icons, manifest, vendored hunch: the rest of what index.html pulls.
   const asset = path.join(PUBLIC_DIR, pathname.replace(/^\/+/, ''));
   if (asset.startsWith(`${PUBLIC_DIR}${path.sep}`)) return asset;
   return null;

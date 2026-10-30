@@ -64,7 +64,7 @@ export function buildFacets(count = DEFAULT_FACE_COUNT) {
       const angle = normalizeAngle(ring * step);
       // Looking at a panel rotated by angle means turning the rig back by the same
       // amount, which is how Starboard at 90deg has always been viewed from -90deg.
-      return { ...side, theme: terminalTheme, cap: false, angle, view: { x: -8, y: normalizeAngle(-angle) } };
+      return { ...side, theme: terminalTheme, cap: false, ring, angle, view: { x: -8, y: normalizeAngle(-angle) } };
     }),
     ...CAPS.map((cap) => ({ ...cap, theme: terminalTheme, cap: true })),
   ].sort((a, b) => a.face - b.face);
@@ -129,6 +129,49 @@ export function capClipPath(count, angle) {
     return `${round(50 + 50 * Math.sin(phi))}% ${round(50 + flip * 50 * Math.cos(phi))}%`;
   });
   return `polygon(${points.join(', ')})`;
+}
+
+// The face a swipe brings in, as on a touchscreen: the content follows the hand, so a
+// swipe left slides in the side to the right (one step clockwise round the ring) and a
+// swipe down pulls the Crown in from above. A cap has no ring position of its own, so it
+// answers for `side`, the side it was entered from: the opposite swipe goes back there,
+// and a sideways one moves on round the ring as if the cap were not there.
+export function neighbourFace(face, direction, side = face, facets = FACETS) {
+  const from = facets.find((facet) => facet.face === face);
+  if (!from) return null;
+  const crown = facets.find((facet) => facet.cap && facet.angle > 0);
+  const keel = facets.find((facet) => facet.cap && facet.angle < 0);
+  const sides = facets.filter((facet) => !facet.cap);
+  const base = from.cap ? sides.find((facet) => facet.face === side) || sides.find((facet) => facet.ring === 0) : from;
+  const step = { left: 1, right: -1 }[direction];
+  if (step) return sides.find((facet) => facet.ring === (base.ring + step + sides.length) % sides.length).face;
+  if (direction === 'down') return from === keel ? base.face : from === crown ? null : crown.face;
+  if (direction === 'up') return from === crown ? base.face : from === keel ? null : keel.face;
+  return null;
+}
+
+// The face nearest the viewer under the rig's rotateX(rx) rotateY(ry), as styles.css
+// applies it. A side's outward normal is rotateY(angle) of +z and a cap's rotateX(angle)
+// of +z; only the rotated normal's z, which points at the viewer, matters.
+export function frontFace(rotation, facets = FACETS) {
+  const rx = radians(rotation.x);
+  const ry = radians(rotation.y);
+  let best = null;
+  let bestZ = -Infinity;
+  for (const facet of facets) {
+    const a = radians(facet.angle);
+    const [nx, ny, nz] = facet.cap ? [0, -Math.sin(a), Math.cos(a)] : [Math.sin(a), 0, Math.cos(a)];
+    const z = Math.sin(rx) * ny + Math.cos(rx) * (Math.cos(ry) * nz - Math.sin(ry) * nx);
+    if (z > bestZ) {
+      bestZ = z;
+      best = facet.face;
+    }
+  }
+  return best;
+}
+
+function radians(degrees) {
+  return (degrees * Math.PI) / 180;
 }
 
 function sideCount(count) {

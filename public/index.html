@@ -14,8 +14,7 @@
   </head>
   <body>
     <canvas class="shader-field" id="shader-field" aria-hidden="true"></canvas>
-    <span class="hand-cursor" data-hand="hand-left" aria-hidden="true" hidden></span>
-    <span class="hand-cursor" data-hand="hand-right" aria-hidden="true" hidden></span>
+    <div class="swipe-ready" id="swipe-ready" aria-hidden="true"><span id="swipe-hint" hidden>Swipe to change faces</span></div>
 
     <header class="masthead">
       <a class="brand" href="/" aria-label="Coding Cube home">
@@ -92,25 +91,23 @@
           <span><strong>Zero gravity</strong><small>Allow pointer and drag momentum.</small></span>
           <input id="zero-gravity" type="checkbox" checked />
         </label>
-        <label class="setting setting--toggle" for="hand-control">
-          <span>
-            <strong>Hand control</strong>
-            <small>Pinch either hand with fingers open to grab; pinch both to zoom. Camera stays local. <output id="hand-control-status" aria-live="polite">Off</output></small>
-          </span>
-          <input id="hand-control" type="checkbox" />
-        </label>
-        <label class="setting setting--toggle" for="hand-camera">
-          <span><strong>Camera</strong><small>Select the webcam used for hand control.</small></span>
-          <select id="hand-camera" aria-label="Hand control camera"><option value="">Default camera</option></select>
-        </label>
-        <label class="setting setting--range" for="hand-sensitivity">
-          <span>Hand sensitivity <output id="hand-sensitivity-value" for="hand-sensitivity">1.0×</output></span>
-          <input id="hand-sensitivity" type="range" min="0.5" max="2" step="0.1" value="1" />
-        </label>
-        <figure class="hand-preview" aria-hidden="true">
-          <video id="hand-video" autoplay muted playsinline></video>
-          <figcaption>Mirrored preview · processed locally</figcaption>
-        </figure>
+        <div class="air-swipe-settings" id="air-swipe-settings" hidden>
+          <label class="setting setting--toggle" for="air-swipe">
+            <span>
+              <strong>Air swipe</strong>
+              <small>Raise an open hand, then swipe to move between faces. Downloads about 580 MB once; the camera never leaves this tab. <output id="air-swipe-status" aria-live="polite">Off</output></small>
+            </span>
+            <input id="air-swipe" type="checkbox" />
+          </label>
+          <label class="setting setting--toggle" for="air-swipe-camera">
+            <span><strong>Camera</strong><small>Select the webcam used for air swipe.</small></span>
+            <select id="air-swipe-camera" aria-label="Air swipe camera"><option value="">Default camera</option></select>
+          </label>
+          <figure class="swipe-preview" aria-hidden="true">
+            <video id="air-swipe-video" autoplay muted playsinline></video>
+            <figcaption>Mirrored preview · processed locally</figcaption>
+          </figure>
+        </div>
       </section>
     </header>
 

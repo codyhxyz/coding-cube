@@ -132,7 +132,10 @@ export class SpaceController {
     this.velocity = { x: 0, y: 0 };
     this.inertia = false;
     this.#pause();
-    this.rotation = { ...facet.view };
+    // Drags and drift wind the rotation freely, so the stored view is only correct modulo
+    // a turn. Land on the equivalent nearest where the rig already is, or the 420ms
+    // transition takes the long way round and a swipe left animates to the right.
+    this.rotation = { x: nearestTurn(facet.view.x, this.rotation.x), y: nearestTurn(facet.view.y, this.rotation.y) };
     this.zoom = FOCUS_ZOOM / drumScale(FACETS.length);
     this.#markPanels();
     this.#apply(true);
@@ -393,6 +396,10 @@ function inputPair(a, b) {
     y: (a.y + b.y) / 2,
     span: Math.hypot(a.x - b.x, a.y - b.y),
   };
+}
+
+function nearestTurn(angle, current) {
+  return angle + 360 * Math.round((current - angle) / 360);
 }
 
 function clamp(value, min, max) {

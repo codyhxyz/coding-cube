@@ -208,6 +208,6 @@ npm run smoke
 
 In Herdr mode, per-face views of the canonical snapshot are available at `GET /api/herdr/state`.
 
-Hand control is off by default. MediaPipe runs in a browser worker; camera frames are processed locally and are not uploaded.
+Air swipe is off by default and only offered where WebGPU is. hunch (vendored at `public/vendor/hunch/`) runs EmbeddingGemma 2 in a browser worker to see a raised open hand, and frame differences read the swipe; camera frames never leave the tab. Its 580 MB of weights are downloaded once, from R2 at `models.codyh.xyz`, and kept in Cache Storage. To change what it recognises, edit and rerun `scripts/air-swipe/embed-prompts.py`.
 
 The server binds to loopback by default because every terminal is a real shell with access to the configured working directory.
